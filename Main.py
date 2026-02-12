@@ -1,5 +1,4 @@
 import customtkinter as ctk
-
 import serial, serial.tools.list_ports
 import threading, os, platform, hashlib
 from pathlib import Path
