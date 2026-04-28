@@ -92,7 +92,7 @@ class ProximityLockApp(ctk.CTk):
         self.auth_win.title("Admin Authentication")
         self.auth_win.geometry("300x150")
         self.auth_win.attributes("-topmost", True)
-        self.auth_win.grab_set()  # Prevent clicking main window
+        self.auth_win.grab_set()  # Prevent clicking the main window
 
         ctk.CTkLabel(self.auth_win, text="Enter Admin Password:", font=("Arial", 12, "bold")).pack(pady=10)
 
@@ -110,7 +110,7 @@ class ProximityLockApp(ctk.CTk):
         pw = self.pw_entry.get()
         if hashlib.sha256(pw.encode()).hexdigest() == self.stored_hash:
             self.auth_win.destroy()
-            # If correct, stay on Admin tab
+            # If correct, stay on the Admin tab
             self.tabview.set("Admin Settings")
         else:
             self.auth_win.destroy()
