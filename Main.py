@@ -16,13 +16,13 @@ class ProximityLockApp(ctk.CTk):
 
         # name & dimensions
         self.title("UWB Security Lock")
-        self.geometry("500x550")
+        self.geometry("500x700")
 
         # check if locked
         self.is_locked = False
 
         self.distance_history = []
-        self.smoothing_window = 5
+        self.smoothing_window = 25
 
         self.nan_counter = 0
         self.verifying_presence = False
@@ -48,6 +48,8 @@ class ProximityLockApp(ctk.CTk):
         self.create_admin_controls()
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
+
+
     def create_admin_controls(self):
         ctk.CTkLabel(self.tab_admin, text="Bridge Device:", font=("Arial", 12, "bold")).pack(pady=(10, 0))
         self.port_menu = ctk.CTkOptionMenu(self.tab_admin, values=self.get_ports(), command=self.change_port)
@@ -57,6 +59,18 @@ class ProximityLockApp(ctk.CTk):
         self.add_setting("Lock Delay (seconds)", 1, 100, self.time_to_lock)
 
         ctk.CTkButton(self.tab_admin, text="Calibrate 0cm", command=self.calibrate).pack(pady=20)
+
+        ctk.CTkLabel(self.tab_admin, text="Hardware Terminal", font=("Arial", 12, "bold")).pack(pady=(20, 0))
+
+        self.terminal_output = ctk.CTkTextbox(self.tab_admin, height=150, width=400)
+        self.terminal_output.pack(pady=5)
+        self.terminal_output.configure(state="disabled")
+
+        self.command_entry = ctk.CTkEntry(self.tab_admin, placeholder_text="Type command (e.g. 'si')")
+        self.command_entry.pack(pady=5, fill="x", padx=40)
+        self.command_entry.bind("<Return>", lambda e: self.send_manual_command())
+
+        ctk.CTkButton(self.tab_admin, text="Send Command", command=self.send_manual_command).pack(pady=5)
 
     def add_setting(self, label, fr, to, var):
         ctk.CTkLabel(self.tab_admin, text=label, font=("Arial", 12, "bold")).pack(pady=(10, 0))
@@ -68,10 +82,40 @@ class ProximityLockApp(ctk.CTk):
 
     def handle_auth(self):
         if self.tabview.get() == "Admin Settings":
-            pw = ctk.CTkInputDialog(text="Password:", title="Auth").get_input()
-            if pw and hashlib.sha256(pw.encode()).hexdigest() == self.stored_hash:
-                return
+            # Immediately switch back to Dashboard while we authenticate
             self.tabview.set("Dashboard")
+            self.request_password()
+
+    def request_password(self):
+        # Create a popup window
+        self.auth_win = ctk.CTkToplevel(self)
+        self.auth_win.title("Admin Authentication")
+        self.auth_win.geometry("300x150")
+        self.auth_win.attributes("-topmost", True)
+        self.auth_win.grab_set()  # Prevent clicking main window
+
+        ctk.CTkLabel(self.auth_win, text="Enter Admin Password:", font=("Arial", 12, "bold")).pack(pady=10)
+
+        # The 'show="*"' is what creates the mask
+        self.pw_entry = ctk.CTkEntry(self.auth_win, show="*", width=200)
+        self.pw_entry.pack(pady=5)
+        self.pw_entry.focus_set()
+
+        # Bind the Enter key to the submit function
+        self.pw_entry.bind("<Return>", lambda e: self.verify_admin_pass())
+
+        ctk.CTkButton(self.auth_win, text="Login", command=self.verify_admin_pass).pack(pady=10)
+
+    def verify_admin_pass(self):
+        pw = self.pw_entry.get()
+        if hashlib.sha256(pw.encode()).hexdigest() == self.stored_hash:
+            self.auth_win.destroy()
+            # If correct, stay on Admin tab
+            self.tabview.set("Admin Settings")
+        else:
+            self.auth_win.destroy()
+            self.tabview.set("Dashboard")
+            print("Access Denied: Incorrect Password")
 
     def get_ports(self):
         keys = ["SEGGER", "J-LINK", "USBMODEM"]
@@ -96,6 +140,15 @@ class ProximityLockApp(ctk.CTk):
                 while self.running:
                     line = self.ser.readline().decode(errors='ignore')
 
+
+                    if line.strip():
+                        self.after(0, lambda l=line: self.log_to_terminal(l))
+
+
+                    # Debug line
+                    if line.strip(): print(f"[DEBUG RAW]: {line.strip()}")
+
+
                     if "nan" in line.lower() and "0A92" in line:
                         self.nan_counter += 1
                         if self.nan_counter >= 10 and not self.verifying_presence and not self.is_locked:
@@ -106,21 +159,25 @@ class ProximityLockApp(ctk.CTk):
                         self.nan_counter = 0
                         if self.verifying_presence:
                             self.after(0, self.cancel_presence_check)
+                        # Extracting 3D coordinates and converting to Euclidean distance
                         try:
-                            raw = int(abs(float(line.split(',')[4]) * 100))
-                            unfiltered_dist = max(0, raw - self.offset)
+                            parts = line.split(',')
+                            x_t = float(parts[3])  # X Axis
+                            y_t = float(parts[4])  # Y Axis
+                            z_t = float(parts[5])  # Z Axis
 
-                            self.distance_history.append(unfiltered_dist)
-                            if len(self.distance_history) > self.smoothing_window:
-                                self.distance_history.pop(0)
+                            # 3D Euclidean Calculation (Reference origin is 0,0,0)
+                            d_raw = (x_t ** 2 + y_t ** 2 + z_t ** 2) ** 0.5
 
-                            self.current_distance = int(sum(self.distance_history) / len(self.distance_history))
+                            # Convert meters to cm and apply calibration offset
+                            self.current_distance = int(abs(d_raw * 100)) - self.offset
                             self.after(0, lambda: self.label.configure(text=f"{self.current_distance} cm"))
 
                         except (ValueError, IndexError):
+                            # Log the error and skip the cycle to maintain system uptime
                             continue
         except Exception as e:
-            self.after(0, lambda: self.status_label.configure(text=f"ERR: {e}"))
+            self.after(0, lambda err=e: self.status_label.configure(text=f"ERR: {err}"))
 
     def trigger_presence_check(self):
         """Minimalist timed popup"""
@@ -228,6 +285,26 @@ class ProximityLockApp(ctk.CTk):
     def on_closing(self):
         self.running = False
         self.destroy()
+
+    def send_manual_command(self):
+        cmd = self.command_entry.get().strip()
+        if self.ser and self.ser.is_open:
+            # Hardware expects carriage returns to execute
+            full_cmd = f"\r{cmd}\r".encode()
+            self.ser.write(full_cmd)
+
+            # UI Feedback
+            self.log_to_terminal(f">>> {cmd}\n")
+            self.command_entry.delete(0, 'end')
+        else:
+            self.log_to_terminal("ERR: Serial not connected.\n")
+
+    def log_to_terminal(self, text):
+        ## Updates terminal box ##
+        self.terminal_output.configure(state="normal")
+        self.terminal_output.insert("end", text)
+        self.terminal_output.see("end")  # Scroll to bottom
+        self.terminal_output.configure(state="disabled")
 
 
 if __name__ == "__main__":
